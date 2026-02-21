@@ -4,8 +4,8 @@ from pathlib import Path
 import sherpa_onnx
 import soundfile as sf
 from loguru import logger
-from .tts_interface import TTSInterface
-from .tts_model_utils import download_kokoro_model, verify_kokoro_model
+from tts_interface import TTSInterface
+from tts_model_utils import download_kokoro_model, verify_kokoro_model
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)

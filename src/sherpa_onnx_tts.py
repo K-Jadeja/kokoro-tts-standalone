@@ -192,6 +192,58 @@ class TTSEngine(TTSInterface):
                 "💡 Please ensure model files are available or check the download URLs in tts_model_utils.py"
             )
 
+    def _preprocess_abbreviations(self, text: str) -> str:
+        """
+        Preprocess text to prevent abbreviations from being treated as sentence boundaries.
+
+        Removes or expands periods from common abbreviations so sherpa-onnx does not
+        interpret them as sentence-ending periods, which would cause unnatural pauses
+        mid-phrase (e.g. "Mr. Smith" would otherwise pause after "Mr.").
+
+        Args:
+            text (str): Input text that may contain abbreviations with periods.
+
+        Returns:
+            str: Text with abbreviation periods removed or expanded.
+        """
+        import re
+
+        # Title and honorific abbreviations — strip the trailing period so the
+        # sentence splitter does not treat them as sentence boundaries.
+        # Pattern: word boundary + title + literal dot + one-or-more whitespace.
+        titles = [
+            "Mr", "Mrs", "Ms", "Mz", "Dr", "Prof", "Rev", "Sr", "Jr",
+            "Gen", "Lt", "Sgt", "Cpl", "Pvt", "Cpt", "Capt", "Maj", "Col",
+            "Brig", "Adm", "Cmdr", "Det", "Insp",
+            "Gov", "Pres", "Sec", "Rep", "Sen",
+            "St",  # Saint
+        ]
+        for title in titles:
+            text = re.sub(
+                rf"\b{title}\.\s+",
+                f"{title} ",
+                text,
+                flags=re.IGNORECASE,
+            )
+
+        # Latin abbreviations — expand to spoken equivalents.
+        text = re.sub(r"\be\.g\.\s*", "for example, ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bi\.e\.\s*", "that is, ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\betc\.(?=\s|$)", "etc", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bvs\.\s*", "versus ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bapprox\.\s*", "approximately ", text, flags=re.IGNORECASE)
+
+        # Academic degrees — collapse dotted initialism to plain uppercase.
+        text = re.sub(r"\bPh\.D\.?", "PhD", text)
+        text = re.sub(r"\bM\.D\.?", "MD", text)
+        text = re.sub(r"\bB\.A\.?", "BA", text)
+        text = re.sub(r"\bM\.A\.?", "MA", text)
+        text = re.sub(r"\bB\.S\.?", "BS", text)
+        text = re.sub(r"\bM\.S\.?", "MS", text)
+        text = re.sub(r"\bM\.B\.A\.?", "MBA", text)
+
+        return text
+
     def _preprocess_text_for_contractions(self, text: str) -> str:
         """
         Preprocess text to ensure contractions are properly formatted.
@@ -266,7 +318,8 @@ class TTSEngine(TTSInterface):
         Returns:
             str: The path to the generated audio file.
         """
-        # Preprocess text to handle contractions properly
+        # Preprocess text: expand abbreviations first, then fix contractions
+        text = self._preprocess_abbreviations(text)
         text = self._preprocess_text_for_contractions(text)
         logger.debug(f"🔤 Preprocessed text: '{text}'")
 

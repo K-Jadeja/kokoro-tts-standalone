@@ -1,0 +1,301 @@
+import sys
+import os
+from pathlib import Path
+import sherpa_onnx
+import soundfile as sf
+from loguru import logger
+from .tts_interface import TTSInterface
+from .tts_model_utils import download_kokoro_model, verify_kokoro_model
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+
+
+class TTSEngine(TTSInterface):
+    def __init__(
+        self,
+        model_type="vits",  # Add model type parameter: "vits" or "kokoro"
+        # VITS parameters (existing)
+        vits_model="",
+        vits_lexicon="",
+        vits_tokens="",
+        vits_data_dir="",
+        vits_dict_dir="",
+        # Kokoro parameters (new)
+        kokoro_model="",
+        kokoro_voices="",
+        kokoro_tokens="",
+        kokoro_data_dir="",
+        kokoro_dict_dir="",
+        kokoro_lexicon="",
+        kokoro_lang="",
+        # Common parameters
+        tts_rule_fsts="",
+        max_num_sentences=2,
+        sid=0,
+        provider="cpu",
+        num_threads=1,
+        speed=1.0,
+        debug=False,
+    ):
+        self.model_type = model_type
+
+        # VITS parameters
+        self.vits_model = vits_model
+        self.vits_lexicon = vits_lexicon
+        self.vits_tokens = vits_tokens
+        self.vits_data_dir = vits_data_dir
+        self.vits_dict_dir = vits_dict_dir
+
+        # Kokoro parameters
+        self.kokoro_model = kokoro_model
+        self.kokoro_voices = kokoro_voices
+        self.kokoro_tokens = kokoro_tokens
+        self.kokoro_data_dir = kokoro_data_dir
+        self.kokoro_dict_dir = kokoro_dict_dir
+        self.kokoro_lexicon = kokoro_lexicon
+        self.kokoro_lang = kokoro_lang
+
+        # Common parameters
+        self.tts_rule_fsts = tts_rule_fsts
+        self.max_num_sentences = max_num_sentences
+        self.sid = sid
+        self.provider = provider
+        self.num_threads = num_threads
+        self.speed = speed
+        self.debug = debug
+
+        self.file_extension = "wav"
+        self.new_audio_dir = "cache"
+
+        if not os.path.exists(self.new_audio_dir):
+            os.makedirs(self.new_audio_dir)
+
+        self.tts = self.initialize_tts()
+
+    def initialize_tts(self):
+        """
+        Initialize the sherpa-onnx TTS engine for both VITS and Kokoro models.
+        Automatically downloads missing models if needed.
+        """
+        # Check for auto-download of Kokoro models
+        if self.model_type.lower() == "kokoro":
+            self._ensure_kokoro_model_available()
+
+        if self.model_type.lower() == "kokoro":
+            # Configure Kokoro model
+            tts_config = sherpa_onnx.OfflineTtsConfig(
+                model=sherpa_onnx.OfflineTtsModelConfig(
+                    kokoro=sherpa_onnx.OfflineTtsKokoroModelConfig(
+                        model=self.kokoro_model,
+                        voices=self.kokoro_voices,
+                        tokens=self.kokoro_tokens,
+                        data_dir=self.kokoro_data_dir,
+                        dict_dir=self.kokoro_dict_dir,
+                        lexicon=self.kokoro_lexicon,
+                        length_scale=self.speed,  # Kokoro uses length_scale instead of speed
+                    ),
+                    provider=self.provider,
+                    debug=self.debug,
+                    num_threads=self.num_threads,
+                ),
+                rule_fsts=self.tts_rule_fsts,
+                max_num_sentences=self.max_num_sentences,
+            )
+        elif self.model_type.lower() == "vits":
+            # Configure VITS model (your original configuration)
+            tts_config = sherpa_onnx.OfflineTtsConfig(
+                model=sherpa_onnx.OfflineTtsModelConfig(
+                    vits=sherpa_onnx.OfflineTtsVitsModelConfig(
+                        model=self.vits_model,
+                        lexicon=self.vits_lexicon,
+                        data_dir=self.vits_data_dir,
+                        dict_dir=self.vits_dict_dir,
+                        tokens=self.vits_tokens,
+                    ),
+                    provider=self.provider,
+                    debug=self.debug,
+                    num_threads=self.num_threads,
+                ),
+                rule_fsts=self.tts_rule_fsts,
+                max_num_sentences=self.max_num_sentences,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported model type: {self.model_type}. Use 'vits' or 'kokoro'."
+            )
+
+        # Validate the configuration
+        if not tts_config.validate():
+            raise ValueError("Please check your sherpa-onnx TTS config")
+
+        # Create and return the sherpa-onnx OfflineTts object
+        return sherpa_onnx.OfflineTts(tts_config)
+
+    def _ensure_kokoro_model_available(self):
+        """
+        Ensure Kokoro model files are available. Download if missing.
+        """
+        if not self.kokoro_model:
+            logger.warning("⚠️ No Kokoro model path specified")
+            return
+
+        model_path = Path(self.kokoro_model)
+        model_dir = model_path.parent
+
+        # Check if model files exist
+        if (
+            model_path.exists()
+            and Path(self.kokoro_tokens).exists()
+            and Path(self.kokoro_voices).exists()
+        ):
+            if verify_kokoro_model(model_dir):
+                logger.info(f"✅ Kokoro model verified: {model_dir}")
+                return
+
+        # Try to determine model name from path for auto-download
+        model_name = model_dir.name
+        logger.info(f"🔍 Checking for downloadable Kokoro model: {model_name}")
+
+        # Attempt auto-download
+        try:
+            downloaded_path = download_kokoro_model(model_name, model_dir.parent)
+            if downloaded_path:
+                logger.success(
+                    f"🎉 Successfully downloaded Kokoro model: {downloaded_path}"
+                )
+                # Update paths to point to downloaded model
+                self.kokoro_model = str(downloaded_path / "model.onnx")
+                self.kokoro_tokens = str(downloaded_path / "tokens.txt")
+                self.kokoro_voices = str(downloaded_path / "voices.bin")
+                if not self.kokoro_data_dir:
+                    self.kokoro_data_dir = str(downloaded_path / "espeak-ng-data")
+                return
+            else:
+                logger.warning(f"⚠️ Could not auto-download model {model_name}")
+        except Exception as e:
+            logger.warning(f"⚠️ Auto-download failed for {model_name}: {e}")
+
+        # Check if files exist after potential download
+        missing_files = []
+        for file_path, description in [
+            (self.kokoro_model, "model.onnx"),
+            (self.kokoro_tokens, "tokens.txt"),
+            (self.kokoro_voices, "voices.bin"),
+        ]:
+            if not file_path or not Path(file_path).exists():
+                missing_files.append(f"{description} ({file_path})")
+
+        if missing_files:
+            logger.error(f"❌ Missing Kokoro model files: {missing_files}")
+            logger.info(
+                "💡 Please ensure model files are available or check the download URLs in tts_model_utils.py"
+            )
+
+    def _preprocess_text_for_contractions(self, text: str) -> str:
+        """
+        Preprocess text to ensure contractions are properly formatted.
+
+        Args:
+            text (str): Input text that may contain contractions.
+
+        Returns:
+            str: Text with contractions properly formatted.
+        """
+        import re
+
+        # Normalize common contraction variations to standard forms
+        # Handle cases where contractions might be split or malformed
+        text = re.sub(r"\bi\s*'\s*ll\b", "i'll", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bi\s*'\s*m\b", "i'm", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bi\s*'\s*ve\b", "i've", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bi\s*'\s*d\b", "i'd", text, flags=re.IGNORECASE)
+        text = re.sub(r"\byou\s*'\s*re\b", "you're", text, flags=re.IGNORECASE)
+        text = re.sub(r"\byou\s*'\s*ll\b", "you'll", text, flags=re.IGNORECASE)
+        text = re.sub(r"\byou\s*'\s*ve\b", "you've", text, flags=re.IGNORECASE)
+        text = re.sub(r"\byou\s*'\s*d\b", "you'd", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bdon\s*'\s*t\b", "don't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bcan\s*'\s*t\b", "can't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwon\s*'\s*t\b", "won't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwouldn\s*'\s*t\b", "wouldn't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bcouldn\s*'\s*t\b", "couldn't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bshouldn\s*'\s*t\b", "shouldn't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bisn\s*'\s*t\b", "isn't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\baren\s*'\s*t\b", "aren't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwasn\s*'\s*t\b", "wasn't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bweren\s*'\s*t\b", "weren't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bhasn\s*'\s*t\b", "hasn't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bhaven\s*'\s*t\b", "haven't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bhadn\s*'\s*t\b", "hadn't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bdoesn\s*'\s*t\b", "doesn't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bdidn\s*'\s*t\b", "didn't", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bhe\s*'\s*s\b", "he's", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bhe\s*'\s*ll\b", "he'll", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bhe\s*'\s*d\b", "he'd", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bshe\s*'\s*s\b", "she's", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bshe\s*'\s*ll\b", "she'll", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bshe\s*'\s*d\b", "she'd", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bit\s*'\s*s\b", "it's", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bit\s*'\s*ll\b", "it'll", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bit\s*'\s*d\b", "it'd", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwe\s*'\s*re\b", "we're", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwe\s*'\s*ll\b", "we'll", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwe\s*'\s*ve\b", "we've", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwe\s*'\s*d\b", "we'd", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bthey\s*'\s*re\b", "they're", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bthey\s*'\s*ll\b", "they'll", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bthey\s*'\s*ve\b", "they've", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bthey\s*'\s*d\b", "they'd", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bthat\s*'\s*s\b", "that's", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwhat\s*'\s*s\b", "what's", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bwho\s*'\s*s\b", "who's", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bthere\s*'\s*s\b", "there's", text, flags=re.IGNORECASE)
+        text = re.sub(r"\blet\s*'\s*s\b", "let's", text, flags=re.IGNORECASE)
+
+        return text
+
+    def generate_audio(self, text, file_name_no_ext=None):
+        """
+        Generate speech audio file using sherpa-onnx TTS.
+        Works for both VITS and Kokoro models.
+
+        Parameters:
+            text (str): The text to speak.
+            file_name_no_ext (str, optional): Name of the file without extension.
+
+        Returns:
+            str: The path to the generated audio file.
+        """
+        # Preprocess text to handle contractions properly
+        text = self._preprocess_text_for_contractions(text)
+        logger.debug(f"🔤 Preprocessed text: '{text}'")
+
+        file_name = self.generate_cache_file_name(file_name_no_ext, self.file_extension)
+
+        try:
+            if self.model_type.lower() == "kokoro":
+                # For Kokoro, the speed is controlled by length_scale in the model config
+                # So we just pass sid parameter
+                audio = self.tts.generate(text, sid=self.sid)
+            else:
+                # For VITS, use the original parameters
+                audio = self.tts.generate(text, sid=self.sid, speed=self.speed)
+
+            if len(audio.samples) == 0:
+                logger.error(
+                    "Error in generating audios. Please read previous error messages."
+                )
+                return None
+
+            sf.write(
+                file_name,
+                audio.samples,
+                samplerate=audio.sample_rate,
+                subtype="PCM_16",
+            )
+
+            return file_name
+
+        except Exception as e:
+            logger.critical(f"\nError: sherpa-onnx unable to generate audio: {e}")
+            return None

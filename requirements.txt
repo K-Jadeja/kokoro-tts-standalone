@@ -1,0 +1,5 @@
+sherpa-onnx==1.12.12
+soundfile>=0.12.1
+loguru>=0.7.0
+requests>=2.31.0
+tqdm>=4.66.0

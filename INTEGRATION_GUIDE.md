@@ -128,7 +128,7 @@ All files live in `models/kokoro-multi-lang-v1_0/`:
 | File | Size | What it does | Modifiable? |
 |------|------|-------------|-------------|
 | `model.onnx` | ~300MB | The neural network. Takes token IDs + voice embedding → audio. | No |
-| `voices.bin` | ~5MB | Contains 55 voice style embeddings (sid 0–54). Each is a vector that shapes the voice timbre. | No |
+| `voices.bin` | ~5MB | Contains 53 voice style embeddings (sid 0–52). Each is a vector that shapes the voice timbre. | No |
 | `tokens.txt` | ~10KB | Maps phoneme symbols → integer IDs that the model understands. | No |
 | `lexicon-us-en.txt` | ~5.8MB | Maps English words → phoneme sequences. sherpa-onnx looks up each word here FIRST, falls back to espeak-ng if not found. **This is the file you can customize** to control pronunciation. | **Yes** |
 | `espeak-ng-data/` | ~3MB | Pre-compiled phoneme rules for 100+ languages. Used as fallback for words not in the lexicon. | No |
@@ -476,4 +476,66 @@ speak("Hello! This is Kokoro TTS running locally.", "hello.wav")
 4. **Speed is set at config time** via `length_scale`, not at `generate()` time
 5. **sherpa-onnx >= 1.12.12** is required for Kokoro support
 6. **Output is always 24kHz WAV**, PCM float32 samples
-7. **sid=6** is the default voice (af_sky, American female). Range 0–54 available.
+7. **sid=6** is the default voice (af_nicole, American female). Range 0–52 available.
+
+---
+
+## 10. Voice ID Reference (Kokoro v1.0 — 53 speakers)
+
+| SID | Voice | Language | Gender | Notes |
+|-----|-------|----------|--------|---------|
+| 0 | af_alloy | American English | female | |
+| 1 | af_aoede | American English | female | |
+| 2 | af_bella | American English | female | Soft, warm tone |
+| 3 | af_heart | American English | female | |
+| 4 | af_jessica | American English | female | |
+| 5 | af_kore | American English | female | |
+| 6 | af_nicole | American English | female | **Default — clear, articulate** |
+| 7 | af_nova | American English | female | |
+| 8 | af_river | American English | female | |
+| 9 | af_sarah | American English | female | |
+| 10 | af_sky | American English | female | Bright, energetic |
+| 11 | am_adam | American English | male | |
+| 12 | am_echo | American English | male | |
+| 13 | am_eric | American English | male | |
+| 14 | am_fenrir | American English | male | |
+| 15 | am_liam | American English | male | |
+| 16 | am_michael | American English | male | |
+| 17 | am_onyx | American English | male | |
+| 18 | am_puck | American English | male | |
+| 19 | am_santa | American English | male | |
+| 20 | bf_alice | British English | female | |
+| 21 | bf_emma | British English | female | |
+| 22 | bf_isabella | British English | female | British accent |
+| 23 | bf_lily | British English | female | |
+| 24 | bm_daniel | British English | male | |
+| 25 | bm_fable | British English | male | |
+| 26 | bm_george | British English | male | |
+| 27 | bm_lewis | British English | male | |
+| 28 | ef_dora | Spanish | female | |
+| 29 | em_alex | Spanish | male | |
+| 30 | ff_siwis | French | female | |
+| 31 | hf_alpha | Hindi | female | |
+| 32 | hf_beta | Hindi | female | |
+| 33 | hm_omega | Hindi | male | |
+| 34 | hm_psi | Hindi | male | |
+| 35 | if_sara | Italian | female | |
+| 36 | im_nicola | Italian | male | |
+| 37 | jf_alpha | Japanese | female | |
+| 38 | jf_gongitsune | Japanese | female | |
+| 39 | jf_nezumi | Japanese | female | |
+| 40 | jf_tebukuro | Japanese | female | |
+| 41 | jm_kumo | Japanese | male | |
+| 42 | pf_dora | Brazilian Portuguese | female | |
+| 43 | pm_alex | Brazilian Portuguese | male | |
+| 44 | pm_santa | Brazilian Portuguese | male | |
+| 45 | zf_xiaobei | Mandarin Chinese | female | |
+| 46 | zf_xiaoni | Mandarin Chinese | female | |
+| 47 | zf_xiaoxiao | Mandarin Chinese | female | |
+| 48 | zf_xiaoyi | Mandarin Chinese | female | |
+| 49 | zm_yunjian | Mandarin Chinese | male | |
+| 50 | zm_yunxi | Mandarin Chinese | male | |
+| 51 | zm_yunxia | Mandarin Chinese | male | |
+| 52 | zm_yunyang | Mandarin Chinese | male | |
+
+> Source: [sherpa-onnx official docs](https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html#kokoro-multi-lang-v1-0-chinese-english-53-speakers)

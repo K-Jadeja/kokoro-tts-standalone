@@ -192,6 +192,155 @@ class TTSEngine(TTSInterface):
                 "💡 Please ensure model files are available or check the download URLs in tts_model_utils.py"
             )
 
+    def _normalize_unicode_punctuation(self, text: str) -> str:
+        """
+        Normalize Unicode punctuation characters to their ASCII equivalents.
+
+        Many LLM outputs contain typographic (curly) quotes, em-dashes, and
+        other Unicode punctuation that espeak-ng may vocalize literally as
+        symbol names (e.g. "left double quotation mark"). This function
+        converts them to plain ASCII so the TTS engine reads the text naturally.
+
+        Args:
+            text (str): The input text to normalize.
+
+        Returns:
+            str: Text with Unicode punctuation replaced by ASCII equivalents.
+        """
+        replacements = [
+            # Curly / smart double quotes → straight double quote
+            ("\u201c", '"'),  # " LEFT DOUBLE QUOTATION MARK
+            ("\u201d", '"'),  # " RIGHT DOUBLE QUOTATION MARK
+            ("\u201e", '"'),  # „ DOUBLE LOW-9 QUOTATION MARK
+            ("\u00ab", '"'),  # « LEFT-POINTING DOUBLE ANGLE QUOTATION MARK
+            ("\u00bb", '"'),  # » RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
+            # Curly / smart single quotes → straight apostrophe
+            ("\u2018", "'"),  # ' LEFT SINGLE QUOTATION MARK
+            ("\u2019", "'"),  # ' RIGHT SINGLE QUOTATION MARK
+            ("\u201a", "'"),  # ‚ SINGLE LOW-9 QUOTATION MARK
+            ("\u2039", "'"),  # ‹ SINGLE LEFT-POINTING ANGLE QUOTATION MARK
+            ("\u203a", "'"),  # › SINGLE RIGHT-POINTING ANGLE QUOTATION MARK
+            # Dashes → hyphen or comma-space for natural speech rhythm
+            ("\u2014", ", "),  # — EM DASH  (e.g. "it was clear — we had won" → ", ")
+            ("\u2013", "-"),   # – EN DASH
+            ("\u2012", "-"),   # ‒ FIGURE DASH
+            ("\u2015", "-"),   # ― HORIZONTAL BAR
+            # Ellipsis character → three dots (then _convert_ellipsis_to_periods handles it)
+            ("\u2026", "..."),  # … HORIZONTAL ELLIPSIS
+            # Other common typographic symbols
+            ("\u2022", ""),    # • BULLET → remove
+            ("\u00b7", ""),    # · MIDDLE DOT → remove
+            ("\u2032", "'"),   # ′ PRIME (feet/minutes) → apostrophe
+            ("\u2033", '"'),   # ″ DOUBLE PRIME (inches/seconds) → quote
+        ]
+        for src, dst in replacements:
+            text = text.replace(src, dst)
+        return text
+
+    def _filter_asterisks(self, text: str) -> str:
+        """
+        Remove asterisk characters while preserving the emphasized text content.
+
+        Handles *, **, ***, etc. while preserving the text inside them, so
+        LLM markdown emphasis is spoken without the word "asterisk".
+
+        Args:
+            text (str): The input text.
+
+        Returns:
+            str: Text with asterisk characters removed but content preserved.
+        """
+        import re
+
+        filtered_text = re.sub(r"\*+([^*]*?)\*+", r"\1", text)
+        filtered_text = re.sub(r"\*+", "", filtered_text)
+        filtered_text = re.sub(r"\s+", " ", filtered_text).strip()
+        return filtered_text
+
+    def _filter_nested(self, text: str, left: str, right: str) -> str:
+        """
+        Remove all content inside a pair of delimiter characters, handling nesting.
+
+        Args:
+            text (str): The input text.
+            left (str): The opening delimiter (e.g. '[', '(', '<').
+            right (str): The closing delimiter (e.g. ']', ')', '>').
+
+        Returns:
+            str: Text with all content inside the delimiters removed.
+        """
+        import re
+
+        if not isinstance(text, str) or not text:
+            return text
+        result = []
+        depth = 0
+        for char in text:
+            if char == left:
+                depth += 1
+            elif char == right:
+                if depth > 0:
+                    depth -= 1
+            else:
+                if depth == 0:
+                    result.append(char)
+        filtered_text = "".join(result)
+        filtered_text = re.sub(r"\s+", " ", filtered_text).strip()
+        return filtered_text
+
+    def _filter_brackets(self, text: str) -> str:
+        """Remove all content inside square brackets [like this].
+
+        Args:
+            text (str): The input text.
+
+        Returns:
+            str: Text with bracket-enclosed content removed.
+        """
+        return self._filter_nested(text, "[", "]")
+
+    def _filter_parentheses(self, text: str) -> str:
+        """Remove all content inside parentheses (like this).
+
+        Args:
+            text (str): The input text.
+
+        Returns:
+            str: Text with parentheses-enclosed content removed.
+        """
+        return self._filter_nested(text, "(", ")")
+
+    def _filter_angle_brackets(self, text: str) -> str:
+        """Remove all content inside angle brackets <like this>.
+
+        Args:
+            text (str): The input text.
+
+        Returns:
+            str: Text with angle-bracket-enclosed content removed.
+        """
+        return self._filter_nested(text, "<", ">")
+
+    def _convert_ellipsis_to_periods(self, text: str) -> str:
+        """
+        Convert ellipsis sequences ('...') to a single period for cleaner TTS chunking.
+
+        Collapses two or more consecutive dots into one period, avoiding unnatural
+        triple-pause artefacts in espeak-ng.  Does NOT normalize spaces around all
+        periods, as that would mangle abbreviation dots such as Ph.D.
+
+        Args:
+            text (str): The input text.
+
+        Returns:
+            str: Text with multi-dot ellipsis replaced by a single period.
+        """
+        import re
+
+        processed_text = re.sub(r"\.{2,}", ".", text)
+        processed_text = re.sub(r"\s+", " ", processed_text).strip()
+        return processed_text
+
     def _preprocess_abbreviations(self, text: str) -> str:
         """
         Preprocess text to prevent abbreviations from being treated as sentence boundaries.
@@ -318,8 +467,24 @@ class TTSEngine(TTSInterface):
         Returns:
             str: The path to the generated audio file.
         """
-        # Preprocess text: expand abbreviations first, then fix contractions
+        # Layer 1 — structural / Unicode filters (order matters):
+        #   1. Normalize Unicode punctuation (curly quotes, em-dashes, Unicode ellipsis …)
+        #      MUST run before ellipsis conversion so '…' → '...' is handled.
+        text = self._normalize_unicode_punctuation(text)
+        #   2. Strip LLM markdown emphasis (*bold*, **bold**) — keep the text inside.
+        text = self._filter_asterisks(text)
+        #   3. Remove content inside brackets / parentheses / angle brackets entirely
+        #      (stage directions, aside notes, XML-like tags from LLM output).
+        text = self._filter_brackets(text)
+        text = self._filter_parentheses(text)
+        text = self._filter_angle_brackets(text)
+        #   4. Collapse '...' → '.' for better TTS sentence chunking.
+        text = self._convert_ellipsis_to_periods(text)
+
+        # Layer 2 — engine-level fixes applied just before sherpa-onnx sees the text:
+        #   5. Expand abbreviation periods so the sentence splitter doesn't pause mid-phrase.
         text = self._preprocess_abbreviations(text)
+        #   6. Re-join split contractions (e.g. "don ' t" → "don't") from upstream tokenizers.
         text = self._preprocess_text_for_contractions(text)
         logger.debug(f"🔤 Preprocessed text: '{text}'")
 

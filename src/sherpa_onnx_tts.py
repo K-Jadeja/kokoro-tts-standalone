@@ -376,8 +376,8 @@ class TTSEngine(TTSInterface):
             )
 
         # Latin abbreviations — expand to spoken equivalents.
-        text = re.sub(r"\be\.g\.\s*", "for example, ", text, flags=re.IGNORECASE)
-        text = re.sub(r"\bi\.e\.\s*", "that is, ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\be\.g\.,?\s*", "for example, ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\bi\.e\.,?\s*", "that is, ", text, flags=re.IGNORECASE)
         text = re.sub(r"\betc\.(?=\s|$)", "etc", text, flags=re.IGNORECASE)
         text = re.sub(r"\bvs\.\s*", "versus ", text, flags=re.IGNORECASE)
         text = re.sub(r"\bapprox\.\s*", "approximately ", text, flags=re.IGNORECASE)
